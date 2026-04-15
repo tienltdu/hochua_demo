@@ -1,0 +1,84 @@
+{
+  "event_label": "NotebookExport_20251024_1107_optimized",
+  "run_generated_at": "2026-04-14T21:16:16.712768",
+  "raw_event_source": "data/DD_sub1234_2025_hourlyPS.xlsx",
+  "time_window": {
+    "start": "2025-10-24T00:00:00",
+    "stop": "2025-11-07T23:00:00"
+  },
+  "dashboard_defaults": {
+    "horizons_hours": [
+      24,
+      48,
+      72
+    ],
+    "default_horizon_hours": 48
+  },
+  "status": "critical",
+  "threshold_flags": {
+    "reservoir_above_pre_flood_target": false,
+    "reservoir_above_normal_level": false,
+    "reservoir_above_maximum_allowable": false,
+    "downstream_above_threshold_optimized": true,
+    "downstream_above_threshold_observed": true
+  },
+  "reservoir_parameters": {
+    "values": {
+      "normal_water_level": 410.0,
+      "pre_flood_target_level": 405.0,
+      "dead_water_level": 375.0,
+      "maximum_allowable_reservoir_level": 414.88,
+      "downstream_flow_threshold": 4028.0,
+      "priority_order_of_objectives": "đưa mực nước về mức bình thường để sản xuất điện và giảm lũ cho hạ du"
+    },
+    "units": {
+      "normal_water_level": "m",
+      "pre_flood_target_level": "m",
+      "dead_water_level": "m",
+      "maximum_allowable_reservoir_level": "m",
+      "downstream_flow_threshold": "m3/s",
+      "priority_order_of_objectives": "na"
+    }
+  },
+  "initial_conditions": {
+    "reservoir_level_m": 400.25,
+    "reservoir_release_m3s": 74.53
+  },
+  "reservoir": {
+    "water_level_observed_end_m": 403.4083333333333,
+    "water_level_optimized_end_m": 404.9844074844445,
+    "storage_observed_end_m3": 193050533.3333331,
+    "storage_optimized_end_m3": 205180000.0002848,
+    "storage_change_percent": 6.283052658553494,
+    "release_peak_observed": {
+      "value": 722.5516666666667,
+      "time": "2025-10-29T11:00:00"
+    },
+    "release_peak_optimized": {
+      "value": 403.722729,
+      "time": "2025-10-29T07:00:00"
+    },
+    "release_volume_observed_mcm": 285.594465,
+    "release_volume_optimized_mcm": 280.4145080004,
+    "release_volume_reduction_percent": 1.8137455848802932,
+    "release_peak_reduction_percent": 44.125417236599
+  },
+  "control_point": {
+    "flow_peak_observed": {
+      "value": 9172.631833333335,
+      "time": "2025-10-29T16:00:00"
+    },
+    "flow_peak_optimized": {
+      "value": 4468.800962,
+      "time": "2025-10-29T09:00:00"
+    },
+    "flow_volume_observed_mcm": 3021.446424094026,
+    "flow_volume_optimized_mcm": 1228.8571009920001,
+    "flow_volume_reduction_percent": 59.328846899528585,
+    "flow_peak_reduction_percent": 51.281147622644326
+  },
+  "files": {
+    "figure_png": "data/notebook_exports/figures/NotebookExport_20251024_1107_optimized.png",
+    "summary_xlsx": "data/notebook_exports/summaries/NotebookExport_20251024_1107_optimized.xlsx"
+  }
+}
