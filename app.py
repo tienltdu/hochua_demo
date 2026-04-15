@@ -158,8 +158,8 @@ def render_alerts(flags: dict[str, bool]):
 
 
 def main():
-    st.title("Mô phỏng vận hành lũ Dakdrinh")
-    st.caption("Màn hình tua lại diễn biến lũ năm 2025 và khuyến nghị vận hành dựa trên kết quả tối ưu hóa được tạo từ notebook.")
+    st.title("Mô phỏng vận hành lũ cho hồ TĐ. Dakdrinh")
+    st.caption("Màn hình tua lại diễn biến lũ năm 2025 và khuyến nghị vận hành dựa trên kết quả tối ưu hóa.")
 
     summary_paths = list_run_summaries()
     if not summary_paths:
