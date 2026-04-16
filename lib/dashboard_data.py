@@ -171,7 +171,14 @@ def timestamp_options(df: pd.DataFrame) -> list[pd.Timestamp]:
 def percent_change(baseline: float, candidate: float) -> float:
     if pd.isna(baseline) or baseline == 0:
         return 0.0
-    return ((baseline - candidate) / baseline) * 100.0
+    return ((candidate - baseline) / baseline) * 100.0
+
+
+def format_flow_comparison(label: str, change_percent: float) -> str:
+    if abs(change_percent) < 0.05:
+        return f"{label} tương đương quan trắc 0.0%"
+    direction = "cao hơn" if change_percent > 0 else "thấp hơn"
+    return f"{label} {direction} quan trắc {change_percent:.1f}%"
 
 
 def derive_window_summary(window_df: pd.DataFrame) -> dict[str, Any]:

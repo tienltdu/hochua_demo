@@ -30,7 +30,7 @@ except ImportError:
     def _percent_change(baseline: float, candidate: float) -> float:
         if pd.isna(baseline) or baseline == 0:
             return 0.0
-        return ((baseline - candidate) / baseline) * 100.0
+        return ((candidate - baseline) / baseline) * 100.0
 
     def derive_window_summary(window_df):
         if window_df.empty:
@@ -230,23 +230,29 @@ def render_alerts(flags: dict[str, bool]):
 
 
 def build_recommendation(summary, operational_state, window_summary):
+    def format_flow_comparison(label, change_percent):
+        if abs(change_percent) < 0.05:
+            return f"{label} tương đương quan trắc 0.0%"
+        direction = "cao hơn" if change_percent > 0 else "thấp hơn"
+        return f"{label} {direction} quan trắc {change_percent:.1f}%"
+
     parameter_count = len(inspect.signature(recommendation_text).parameters)
     if parameter_count >= 3:
-        return recommendation_text(summary, operational_state, window_summary)
+        action, reason, _ = recommendation_text(summary, operational_state, window_summary)
+    else:
+        action, reason = recommendation_text(summary, operational_state)
 
-    action, reason = recommendation_text(summary, operational_state)
     tradeoff = (
-        f"Trong cửa sổ đã chọn, đỉnh lưu lượng hạ du tối ưu thấp hơn quan trắc "
-        f"{window_summary['downstream_peak_reduction_percent']:.1f}%, "
-        f"và đỉnh lưu lượng xả tối ưu thấp hơn quan trắc "
-        f"{window_summary['release_peak_reduction_percent']:.1f}%."
+        "Trong cửa sổ đã chọn, "
+        f"{format_flow_comparison('đỉnh lưu lượng hạ du tối ưu', window_summary['downstream_peak_reduction_percent'])}, "
+        f"và {format_flow_comparison('đỉnh lưu lượng xả tối ưu', window_summary['release_peak_reduction_percent'])}."
     )
     return action, reason, tradeoff
 
 
 def main():
     st.title("Mô phỏng vận hành lũ Dakdrinh")
-    st.caption("Màn hình phát lại diễn biến lũ năm 2025 và gợi ý vận hành được tạo từ kết quả tối ưu hóa xuất từ notebook.")
+    st.caption("Màn hình phát lại diễn biến lũ năm 2025 và gợi ý vận hành được tạo từ kết quả tối ưu hóa.")
 
     horizons = [24, 48, 72]
     selected_horizon = st.sidebar.radio("Tầm nhìn ra quyết định (giờ)", horizons, index=1)
@@ -338,8 +344,8 @@ def main():
                     "Kết thúc cửa sổ",
                     "Mực nước cuối kỳ quan trắc",
                     "Mực nước cuối kỳ tối ưu",
-                    "Mức giảm đỉnh xả",
-                    "Mức giảm đỉnh hạ du",
+                    "Biến đổi đỉnh xả",
+                    "Biến đổi đỉnh hạ du",
                 ],
                 "Giá trị": [
                     window_summary["window_start"].strftime("%Y-%m-%d %H:%M"),
