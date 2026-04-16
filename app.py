@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 
@@ -228,6 +229,21 @@ def render_alerts(flags: dict[str, bool]):
             st.warning(item)
 
 
+def build_recommendation(summary, operational_state, window_summary):
+    parameter_count = len(inspect.signature(recommendation_text).parameters)
+    if parameter_count >= 3:
+        return recommendation_text(summary, operational_state, window_summary)
+
+    action, reason = recommendation_text(summary, operational_state)
+    tradeoff = (
+        f"Trong cửa sổ đã chọn, đỉnh lưu lượng hạ du tối ưu thấp hơn quan trắc "
+        f"{window_summary['downstream_peak_reduction_percent']:.1f}%, "
+        f"và đỉnh lưu lượng xả tối ưu thấp hơn quan trắc "
+        f"{window_summary['release_peak_reduction_percent']:.1f}%."
+    )
+    return action, reason, tradeoff
+
+
 def main():
     st.title("Mô phỏng vận hành lũ Dakdrinh")
     st.caption("Màn hình phát lại diễn biến lũ năm 2025 và gợi ý vận hành được tạo từ kết quả tối ưu hóa xuất từ notebook.")
@@ -291,7 +307,7 @@ def main():
         render_alerts(operational_state["threshold_flags"])
     with right:
         st.subheader("Khuyến nghị")
-        action, reason, tradeoff = recommendation_text(bundle.summary, operational_state, window_summary)
+        action, reason, tradeoff = build_recommendation(bundle.summary, operational_state, window_summary)
         st.info(action)
         st.write(reason)
         st.caption(tradeoff)
