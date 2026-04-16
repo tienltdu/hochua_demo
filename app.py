@@ -4,7 +4,10 @@ import sys
 from pathlib import Path
 
 import plotly.graph_objects as go
+import pandas as pd
 import streamlit as st
+
+OPTIMIZED_SERIES_COLOR = "#d100d1"
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 LIB_DIR = PROJECT_ROOT / "lib"
@@ -20,6 +23,75 @@ from dashboard_data import (  # noqa: E402
     timestamp_options,
 )
 
+try:  # noqa: E402
+    from dashboard_data import derive_operational_state, derive_window_summary  # type: ignore
+except ImportError:
+    def _percent_change(baseline: float, candidate: float) -> float:
+        if pd.isna(baseline) or baseline == 0:
+            return 0.0
+        return ((baseline - candidate) / baseline) * 100.0
+
+    def derive_window_summary(window_df):
+        if window_df.empty:
+            return {}
+
+        release_peak_observed = float(window_df["QoutDD"].max())
+        release_peak_optimized = float(window_df["Qoutput_Reservoir1"].max())
+        downstream_peak_observed = float(window_df["QinSG"].max())
+        downstream_peak_optimized = float(window_df["Q_controlpoint"].max())
+
+        observed_end_wl = float(window_df["WLDD"].iloc[-1])
+        optimized_end_wl = float(window_df["reservoir_level_optimized"].iloc[-1])
+
+        return {
+            "window_start": window_df["Datetime"].min(),
+            "window_end": window_df["Datetime"].max(),
+            "release_peak_observed": release_peak_observed,
+            "release_peak_optimized": release_peak_optimized,
+            "downstream_peak_observed": downstream_peak_observed,
+            "downstream_peak_optimized": downstream_peak_optimized,
+            "release_peak_reduction_percent": _percent_change(release_peak_observed, release_peak_optimized),
+            "downstream_peak_reduction_percent": _percent_change(downstream_peak_observed, downstream_peak_optimized),
+            "water_level_observed_end_m": observed_end_wl,
+            "water_level_optimized_end_m": optimized_end_wl,
+        }
+
+    def derive_operational_state(window_df, summary):
+        params = summary["reservoir_parameters"]["values"]
+        current_row = window_df.iloc[0] if not window_df.empty else pd.Series(dtype="object")
+
+        pre_flood_target = params.get("pre_flood_target_level")
+        normal_level = params.get("normal_water_level")
+        maximum_level = params.get("maximum_allowable_reservoir_level")
+        downstream_threshold = params.get("downstream_flow_threshold")
+
+        def exceeds(series_name, threshold):
+            if threshold is None or series_name not in window_df:
+                return False
+            return bool((window_df[series_name] > threshold).fillna(False).any())
+
+        threshold_flags = {
+            "reservoir_above_pre_flood_target": exceeds("reservoir_level_optimized", pre_flood_target),
+            "reservoir_above_normal_level": exceeds("reservoir_level_optimized", normal_level),
+            "reservoir_above_maximum_allowable": exceeds("reservoir_level_optimized", maximum_level),
+            "downstream_above_threshold_optimized": exceeds("Q_controlpoint", downstream_threshold),
+        }
+
+        if threshold_flags["reservoir_above_maximum_allowable"] or threshold_flags["downstream_above_threshold_optimized"]:
+            status = "critical"
+        elif threshold_flags["reservoir_above_pre_flood_target"] or threshold_flags["reservoir_above_normal_level"]:
+            status = "watch"
+        else:
+            status = "normal"
+
+        return {
+            "status": status,
+            "threshold_flags": threshold_flags,
+            "current_row": current_row,
+            "window_start": window_df["Datetime"].min() if "Datetime" in window_df else None,
+            "window_end": window_df["Datetime"].max() if "Datetime" in window_df else None,
+        }
+
 
 st.set_page_config(
     page_title="Mô phỏng vận hành lũ Dakdrinh",
@@ -31,7 +103,7 @@ st.set_page_config(
 def format_status(status: str) -> str:
     mapping = {
         "normal": "Bình thường",
-        "watch": "Cảnh báo",
+        "watch": "Cần theo dõi",
         "critical": "Nghiêm trọng",
     }
     return mapping.get(status, status.title())
@@ -54,14 +126,14 @@ def make_level_chart(df, params, current_time):
             x=df["Datetime"],
             y=df["reservoir_level_optimized"],
             name="Mực nước tối ưu",
-            line=dict(color="#d92d20", width=2.5, dash="dash"),
+            line=dict(color=OPTIMIZED_SERIES_COLOR, width=2.5, dash="dash"),
         )
     )
     band_lines = [
         ("Mực nước chết", params["dead_water_level"], "#6941c6"),
         ("Mực đón lũ", params["pre_flood_target_level"], "#16a34a"),
         ("Mực nước bình thường", params["normal_water_level"], "#2563eb"),
-        ("Mực tối đa cho phép", params["maximum_allowable_reservoir_level"], "#b42318"),
+        ("Mức tối đa cho phép", params["maximum_allowable_reservoir_level"], "#b42318"),
     ]
     for name, value, color in band_lines:
         fig.add_hline(y=value, line_color=color, line_dash="dot", annotation_text=name, annotation_position="top left")
@@ -87,7 +159,7 @@ def make_release_chart(df, current_time):
             x=df["Datetime"],
             y=df["Qoutput_Reservoir1"],
             name="Lưu lượng xả tối ưu",
-            line=dict(color="#d92d20", width=2.5),
+            line=dict(color=OPTIMIZED_SERIES_COLOR, width=2.5),
         )
     )
     fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
@@ -110,7 +182,7 @@ def make_downstream_chart(df, threshold, current_time):
             x=df["Datetime"],
             y=df["Q_controlpoint"],
             name="Lưu lượng hạ du tối ưu",
-            line=dict(color="#7a5af8", width=2.5),
+            line=dict(color=OPTIMIZED_SERIES_COLOR, width=2.5),
         )
     )
     if threshold is not None:
@@ -123,7 +195,7 @@ def make_downstream_chart(df, threshold, current_time):
         )
     fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
     fig.update_layout(
-        title="Quá trình lưu lượng tại điểm kiểm soát hạ du",
+        title="Quá trình lưu lượng tại điểm khống chế hạ du",
         margin=dict(l=20, r=20, t=60, b=20),
         legend=dict(orientation="h", y=1.08),
         xaxis_title="Thời gian",
@@ -143,23 +215,26 @@ def render_readiness(readiness: dict[str, tuple[bool, str]]):
 
 def render_alerts(flags: dict[str, bool]):
     label_map = {
-        "reservoir_above_pre_flood_target": "Mực nước hồ vượt mực đón lũ",
-        "reservoir_above_normal_level": "Mực nước hồ vượt mực bình thường",
+        "reservoir_above_pre_flood_target": "Mực nước hồ vượt mức đón lũ",
+        "reservoir_above_normal_level": "Mực nước hồ vượt mức bình thường",
         "reservoir_above_maximum_allowable": "Mực nước hồ vượt mức tối đa cho phép",
         "downstream_above_threshold_optimized": "Lưu lượng hạ du tối ưu vượt ngưỡng",
-        "downstream_above_threshold_observed": "Lưu lượng hạ du quan trắc vượt ngưỡng",
     }
-    active = [label_map[key] for key, value in flags.items() if value]
+    active = [label_map[key] for key, value in flags.items() if value and key in label_map]
     if not active:
-        st.success("Không có cảnh báo ngưỡng nào đang kích hoạt trong lần chạy tối ưu đã chọn.")
+        st.success("Không có cảnh báo ngưỡng nào trong phương án tối ưu đã chọn.")
     else:
         for item in active:
             st.warning(item)
 
 
 def main():
-    st.title("Mô phỏng vận hành lũ cho hồ TĐ. Dakdrinh")
-    st.caption("Màn hình tua lại diễn biến lũ năm 2025 và khuyến nghị vận hành dựa trên kết quả tối ưu hóa.")
+    st.title("Mô phỏng vận hành lũ Dakdrinh")
+    st.caption("Màn hình phát lại diễn biến lũ năm 2025 và gợi ý vận hành được tạo từ kết quả tối ưu hóa xuất từ notebook.")
+
+    horizons = [24, 48, 72]
+    selected_horizon = st.sidebar.radio("Tầm nhìn ra quyết định (giờ)", horizons, index=1)
+    playback_container = st.sidebar.container()
 
     summary_paths = list_run_summaries()
     if not summary_paths:
@@ -167,19 +242,15 @@ def main():
         st.stop()
 
     summary_options = {path.name: path for path in summary_paths}
-    selected_summary_name = st.sidebar.selectbox("Bản tổng hợp lần chạy", list(summary_options.keys()))
+    selected_summary_name = st.sidebar.selectbox("Bộ tổng hợp lần chạy", list(summary_options.keys()))
     try:
         bundle = load_dashboard_bundle(summary_options[selected_summary_name])
     except Exception as exc:
-        st.error(f"Không thể tải dữ liệu bảng điều khiển: {exc}")
-        st.info("Cần bảo đảm các tệp đầu ra từ notebook là bản mới nhất và môi trường đã cài `openpyxl`.")
+        st.error(f"Không thể tải dữ liệu dashboard: {exc}")
+        st.info("Cần đảm bảo các tệp xuất từ notebook là bản mới nhất và môi trường đã cài openpyxl.")
         st.stop()
 
     render_readiness(bundle.readiness)
-
-    horizons = bundle.summary.get("dashboard_defaults", {}).get("horizons_hours", [24, 48, 72])
-    default_horizon = bundle.summary.get("dashboard_defaults", {}).get("default_horizon_hours", 48)
-    selected_horizon = st.sidebar.radio("Tầm nhìn điều hành", horizons, index=horizons.index(default_horizon) if default_horizon in horizons else 0)
 
     timestamps = timestamp_options(bundle.merged)
     if not timestamps:
@@ -187,15 +258,17 @@ def main():
         st.stop()
 
     default_time = timestamps[0]
-    current_time = st.sidebar.select_slider("Thời điểm tua lại", options=timestamps, value=default_time)
+    current_time = playback_container.select_slider("Thời điểm phát lại", options=timestamps, value=default_time)
 
     window_df = horizon_slice(bundle.merged, current_time, selected_horizon)
     if window_df.empty:
-        st.error("Khung thời gian đã chọn không có dữ liệu.")
+        st.error("Khoảng thời gian đã chọn không có dữ liệu.")
         st.stop()
-    current_row = window_df.iloc[0]
+    operational_state = derive_operational_state(window_df, bundle.summary)
+    window_summary = derive_window_summary(window_df)
+    current_row = operational_state["current_row"]
 
-    status = bundle.summary.get("status", "watch")
+    status = operational_state["status"]
     st.markdown(
         f"""
         <div style="padding:0.8rem 1rem;border-radius:12px;background:{status_color(status)};color:white;font-weight:600;display:inline-block;">
@@ -210,15 +283,15 @@ def main():
     top2.metric("Mực nước hồ", f"{current_row['WLDD']:.2f} m")
     top3.metric("Lưu lượng xả tối ưu", f"{current_row['Qoutput_Reservoir1']:.2f} m3/s")
     top4.metric("Lưu lượng hạ du tối ưu", f"{current_row['Q_controlpoint']:.2f} m3/s")
-    top5.metric("Mực nước cuối kỳ (tối ưu)", f"{bundle.summary['reservoir']['water_level_optimized_end_m']:.2f} m")
+    top5.metric("Mực nước cuối kỳ (tối ưu)", f"{window_summary['water_level_optimized_end_m']:.2f} m")
 
     left, right = st.columns([1.1, 0.9])
     with left:
         st.subheader("Cảnh báo")
-        render_alerts(bundle.summary.get("threshold_flags", {}))
+        render_alerts(operational_state["threshold_flags"])
     with right:
         st.subheader("Khuyến nghị")
-        action, reason, tradeoff = recommendation_text(bundle.summary, current_row)
+        action, reason, tradeoff = recommendation_text(bundle.summary, operational_state, window_summary)
         st.info(action)
         st.write(reason)
         st.caption(tradeoff)
@@ -235,54 +308,54 @@ def main():
         use_container_width=True,
     )
 
-    st.subheader("Tổng hợp lần chạy")
+    st.subheader("Tổng hợp kết quả")
     sum1, sum2, sum3, sum4 = st.columns(4)
-    sum1.metric("Đỉnh xả quan trắc", f"{bundle.summary['reservoir']['release_peak_observed']['value']:.1f} m3/s")
-    sum2.metric("Đỉnh xả tối ưu", f"{bundle.summary['reservoir']['release_peak_optimized']['value']:.1f} m3/s")
-    sum3.metric("Đỉnh hạ du quan trắc", f"{bundle.summary['control_point']['flow_peak_observed']['value']:.1f} m3/s")
-    sum4.metric("Đỉnh hạ du tối ưu", f"{bundle.summary['control_point']['flow_peak_optimized']['value']:.1f} m3/s")
+    sum1.metric("Đỉnh xả quan trắc", f"{window_summary['release_peak_observed']:.1f} m3/s")
+    sum2.metric("Đỉnh xả tối ưu", f"{window_summary['release_peak_optimized']:.1f} m3/s")
+    sum3.metric("Đỉnh hạ du quan trắc", f"{window_summary['downstream_peak_observed']:.1f} m3/s")
+    sum4.metric("Đỉnh hạ du tối ưu", f"{window_summary['downstream_peak_optimized']:.1f} m3/s")
 
     st.dataframe(
         {
-            "Chỉ số": [
-                "Nhãn sự kiện",
-                "Thời điểm tạo lần chạy",
-                "Mực nước cuối kỳ quan trắc",
-                "Mực nước cuối kỳ tối ưu",
-                "Mức giảm đỉnh lưu lượng xả",
-                "Mức giảm đỉnh lưu lượng hạ du",
-            ],
-            "Giá trị": [
-                bundle.summary["event_label"],
-                bundle.summary.get("run_generated_at", "n/a"),
-                f"{bundle.summary['reservoir']['water_level_observed_end_m']:.2f} m",
-                f"{bundle.summary['reservoir']['water_level_optimized_end_m']:.2f} m",
-                f"{bundle.summary['reservoir']['release_peak_reduction_percent']:.1f} %",
-                f"{bundle.summary['control_point']['flow_peak_reduction_percent']:.1f} %",
-            ],
-        },
+                "Chỉ số": [
+                    "Bắt đầu cửa sổ",
+                    "Kết thúc cửa sổ",
+                    "Mực nước cuối kỳ quan trắc",
+                    "Mực nước cuối kỳ tối ưu",
+                    "Mức giảm đỉnh xả",
+                    "Mức giảm đỉnh hạ du",
+                ],
+                "Giá trị": [
+                    window_summary["window_start"].strftime("%Y-%m-%d %H:%M"),
+                    window_summary["window_end"].strftime("%Y-%m-%d %H:%M"),
+                    f"{window_summary['water_level_observed_end_m']:.2f} m",
+                    f"{window_summary['water_level_optimized_end_m']:.2f} m",
+                    f"{window_summary['release_peak_reduction_percent']:.1f} %",
+                    f"{window_summary['downstream_peak_reduction_percent']:.1f} %",
+                ],
+            },
         hide_index=True,
         use_container_width=True,
     )
 
-    st.subheader("Tệp đầu ra báo cáo")
+    st.subheader("Tệp đầu ra")
     files = bundle.summary.get("files", {})
     col_a, col_b, col_c = st.columns(3)
     json_bytes = bundle.summary_path.read_bytes()
     xlsx_path = resolve_local_artifact(files.get("summary_xlsx"), bundle.summary_path, "summary_xlsx")
     png_path = resolve_local_artifact(files.get("figure_png"), bundle.summary_path, "figure_png")
     with col_a:
-        st.download_button("Tải bản tổng hợp JSON", data=json_bytes, file_name=bundle.summary_path.name, mime="application/json")
+        st.download_button("Tải xuống tổng hợp JSON", data=json_bytes, file_name=bundle.summary_path.name, mime="application/json")
         st.code(str(bundle.summary_path), language=None)
     with col_b:
         if xlsx_path and xlsx_path.exists():
-            st.download_button("Tải bản tổng hợp XLSX", data=xlsx_path.read_bytes(), file_name=xlsx_path.name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button("Tải xuống tổng hợp XLSX", data=xlsx_path.read_bytes(), file_name=xlsx_path.name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             st.code(str(xlsx_path), language=None)
         else:
             st.error("Không tìm thấy tệp tổng hợp XLSX.")
     with col_c:
         if png_path and png_path.exists():
-            st.download_button("Tải hình PNG", data=png_path.read_bytes(), file_name=png_path.name, mime="image/png")
+            st.download_button("Tải xuống hình PNG", data=png_path.read_bytes(), file_name=png_path.name, mime="image/png")
             st.code(str(png_path), language=None)
         else:
             st.error("Không tìm thấy tệp hình PNG.")

@@ -168,32 +168,124 @@ def timestamp_options(df: pd.DataFrame) -> list[pd.Timestamp]:
     return list(pd.to_datetime(df["Datetime"]).tolist())
 
 
-def recommendation_text(summary: dict[str, Any], current_row: pd.Series) -> tuple[str, str, str]:
-    status = summary.get("status", "watch")
+def percent_change(baseline: float, candidate: float) -> float:
+    if pd.isna(baseline) or baseline == 0:
+        return 0.0
+    return ((baseline - candidate) / baseline) * 100.0
+
+
+def derive_window_summary(window_df: pd.DataFrame) -> dict[str, Any]:
+    if window_df.empty:
+        return {}
+
+    release_peak_observed = float(window_df["QoutDD"].max())
+    release_peak_optimized = float(window_df["Qoutput_Reservoir1"].max())
+    downstream_peak_observed = float(window_df["QinSG"].max())
+    downstream_peak_optimized = float(window_df["Q_controlpoint"].max())
+
+    observed_end_wl = float(window_df["WLDD"].iloc[-1])
+    optimized_end_wl = float(window_df["reservoir_level_optimized"].iloc[-1])
+
+    return {
+        "window_start": window_df["Datetime"].min(),
+        "window_end": window_df["Datetime"].max(),
+        "release_peak_observed": release_peak_observed,
+        "release_peak_optimized": release_peak_optimized,
+        "downstream_peak_observed": downstream_peak_observed,
+        "downstream_peak_optimized": downstream_peak_optimized,
+        "release_peak_reduction_percent": percent_change(release_peak_observed, release_peak_optimized),
+        "downstream_peak_reduction_percent": percent_change(downstream_peak_observed, downstream_peak_optimized),
+        "water_level_observed_end_m": observed_end_wl,
+        "water_level_optimized_end_m": optimized_end_wl,
+    }
+
+
+def derive_operational_state(window_df: pd.DataFrame, summary: dict[str, Any]) -> dict[str, Any]:
+    params = summary["reservoir_parameters"]["values"]
+    current_row = window_df.iloc[0] if not window_df.empty else pd.Series(dtype="object")
+
+    pre_flood_target = params.get("pre_flood_target_level")
+    normal_level = params.get("normal_water_level")
+    maximum_level = params.get("maximum_allowable_reservoir_level")
+    downstream_threshold = params.get("downstream_flow_threshold")
+
+    def exceeds(series_name: str, threshold: float | None) -> bool:
+        if threshold is None or series_name not in window_df:
+            return False
+        return bool((window_df[series_name] > threshold).fillna(False).any())
+
+    threshold_flags = {
+        "reservoir_above_pre_flood_target": exceeds("reservoir_level_optimized", pre_flood_target),
+        "reservoir_above_normal_level": exceeds("reservoir_level_optimized", normal_level),
+        "reservoir_above_maximum_allowable": exceeds("reservoir_level_optimized", maximum_level),
+        "downstream_above_threshold_optimized": exceeds("Q_controlpoint", downstream_threshold),
+    }
+
+    if threshold_flags["reservoir_above_maximum_allowable"] or threshold_flags["downstream_above_threshold_optimized"]:
+        status = "critical"
+    elif threshold_flags["reservoir_above_pre_flood_target"] or threshold_flags["reservoir_above_normal_level"]:
+        status = "watch"
+    else:
+        status = "normal"
+
+    return {
+        "status": status,
+        "threshold_flags": threshold_flags,
+        "current_row": current_row,
+        "window_start": window_df["Datetime"].min() if "Datetime" in window_df else None,
+        "window_end": window_df["Datetime"].max() if "Datetime" in window_df else None,
+    }
+
+
+def recommendation_text(
+    summary: dict[str, Any],
+    operational_state: dict[str, Any],
+    window_summary: dict[str, Any],
+) -> tuple[str, str, str]:
+    status = operational_state.get("status", "watch")
+    current_row = operational_state.get("current_row")
+    flags = operational_state.get("threshold_flags", {})
     params = summary["reservoir_parameters"]["values"]
     priority = params.get("priority_order_of_objectives", "")
 
     if status == "critical":
-        action = "Vận hành theo chế độ phòng chống lũ và ưu tiên giám sát rủi ro hạ du."
-        reason = (
-            f"Lưu lượng hạ du theo phương án tối ưu vẫn vượt ngưỡng "
-            f"{params.get('downstream_flow_threshold')} {summary['reservoir_parameters']['units'].get('downstream_flow_threshold', '')}."
-        )
+        action = "Vận hành theo chế độ cắt lũ và ưu tiên giám sát rủi ro hạ du."
+        if flags.get("reservoir_above_maximum_allowable"):
+            reason = (
+                "Quỹ đạo mực nước tối ưu vượt mức vận hành tối đa cho phép "
+                f"{params.get('maximum_allowable_reservoir_level')} "
+                f"{summary['reservoir_parameters']['units'].get('maximum_allowable_reservoir_level', '')} "
+                "trong tầm nhìn ra quyết định đã chọn."
+            )
+        else:
+            reason = (
+                "Lưu lượng hạ du tối ưu vượt ngưỡng "
+                f"{params.get('downstream_flow_threshold')} "
+                f"{summary['reservoir_parameters']['units'].get('downstream_flow_threshold', '')} "
+                "trong tầm nhìn ra quyết định đã chọn."
+            )
     elif status == "watch":
-        action = "Duy trì xả điều tiết có kiểm soát và đánh giá sát cửa sổ dự báo tiếp theo."
-        reason = "Quỹ đạo vận hành tối ưu đang tiệm cận các ngưỡng điều hành và cần được theo dõi chặt chẽ."
+        action = "Duy trì xả có kiểm soát và đánh giá sát cửa sổ dự báo tiếp theo."
+        if flags.get("reservoir_above_pre_flood_target"):
+            reason = (
+                "Mực nước hồ tối ưu vượt mức đón lũ trong tầm nhìn ra quyết định đã chọn, "
+                "vì vậy cần theo dõi chặt phương án xả."
+            )
+        else:
+            reason = "Quỹ đạo tối ưu đang tiến sát các ngưỡng vận hành và cần được theo dõi chủ động."
     else:
-        action = "Tiếp tục phương án xả tối ưu và theo dõi các thay đổi của dự báo."
-        reason = "Các chỉ số của hồ chứa và hạ du vẫn nằm trong các ngưỡng cấu hình của phương án tối ưu."
+        action = "Tiếp tục phương án xả tối ưu và theo dõi các thay đổi dự báo."
+        reason = "Các chỉ số hồ chứa và hạ du vẫn nằm trong các ngưỡng cấu hình của phương án tối ưu."
 
     tradeoff = (
-        f"Đỉnh lưu lượng hạ du theo phương án tối ưu thấp hơn {summary['control_point']['flow_peak_reduction_percent']:.1f}% so với quan trắc, "
-        f"đồng thời dung tích hồ cuối sự kiện thay đổi {summary['reservoir']['storage_change_percent']:.1f}%."
+        f"Trong cửa sổ đã chọn, đỉnh lưu lượng hạ du tối ưu thấp hơn quan trắc "
+        f"{window_summary['downstream_peak_reduction_percent']:.1f}%, "
+        f"và đỉnh lưu lượng xả tối ưu thấp hơn quan trắc {window_summary['release_peak_reduction_percent']:.1f}%."
     )
 
     if isinstance(current_row, pd.Series) and not current_row.empty:
         reason += (
-            f" Tại thời điểm đang xem, mực nước hồ là {current_row['WLDD']:.2f} m, "
+            f" Tại thời điểm hiện tại, mực nước hồ là {current_row['WLDD']:.2f} m, "
             f"lưu lượng xả tối ưu là {current_row['Qoutput_Reservoir1']:.2f} m3/s, "
             f"và lưu lượng hạ du tối ưu là {current_row['Q_controlpoint']:.2f} m3/s."
         )

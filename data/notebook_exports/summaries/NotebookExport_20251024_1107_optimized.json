@@ -29,7 +29,7 @@
       "dead_water_level": 375.0,
       "maximum_allowable_reservoir_level": 414.88,
       "downstream_flow_threshold": 4028.0,
-      "priority_order_of_objectives": "đưa mực nước về mức bình thường để sản xuất điện và giảm lũ cho hạ du"
+      "priority_order_of_objectives": "bring reservoir water level back to normal level for energy generation and reduce flood downstream"
     },
     "units": {
       "normal_water_level": "m",
