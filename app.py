@@ -9,6 +9,13 @@ import pandas as pd
 import streamlit as st
 
 OPTIMIZED_SERIES_COLOR = "#d100d1"
+DECISION_HORIZONS = {
+    "24 giờ": 24,
+    "48 giờ": 48,
+    "72 giờ": 72,
+    "1 tuần": 24 * 7,
+    "2 tuần": 24 * 14,
+}
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 LIB_DIR = PROJECT_ROOT / "lib"
@@ -132,12 +139,14 @@ def make_level_chart(df, params, current_time):
     )
     band_lines = [
         ("Mực nước chết", params["dead_water_level"], "#6941c6"),
-        ("Mực đón lũ", params["pre_flood_target_level"], "#16a34a"),
+        ("Mực nước đón lũ thấp nhất", params.get("pre_flood_minimum_level"), "#15803d"),
+        ("Mực nước cao nhất trước lũ", params.get("pre_flood_maximum_level", params.get("pre_flood_target_level")), "#16a34a"),
         ("Mực nước bình thường", params["normal_water_level"], "#2563eb"),
-        ("Mức tối đa cho phép", params["maximum_allowable_reservoir_level"], "#b42318"),
+        ("Cao trình mực nước lũ kiểm tra", params["maximum_allowable_reservoir_level"], "#b42318"),
     ]
     for name, value, color in band_lines:
-        fig.add_hline(y=value, line_color=color, line_dash="dot", annotation_text=name, annotation_position="top left")
+        if value is not None and not pd.isna(value):
+            fig.add_hline(y=value, line_color=color, line_dash="dot", annotation_text=name, annotation_position="top left")
 
     fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
     fig.update_layout(
@@ -175,7 +184,7 @@ def make_release_chart(df, current_time):
     return fig
 
 
-def make_downstream_chart(df, threshold, current_time):
+def make_downstream_flow_chart(df, threshold, current_time):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df["Datetime"], y=df["QinSG"], name="Lưu lượng hạ du quan trắc", line=dict(color="black", width=2)))
     fig.add_trace(
@@ -191,7 +200,7 @@ def make_downstream_chart(df, threshold, current_time):
             y=threshold,
             line_color="#b42318",
             line_dash="dot",
-            annotation_text="Ngưỡng hạ du",
+            annotation_text="Ngưỡng cảnh báo hạ du",
             annotation_position="top left",
         )
     fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
@@ -201,6 +210,46 @@ def make_downstream_chart(df, threshold, current_time):
         legend=dict(orientation="h", y=1.08),
         xaxis_title="Thời gian",
         yaxis_title="Lưu lượng (m3/s)",
+        height=360,
+    )
+    return fig
+
+
+def make_downstream_wl_chart(df, threshold, current_time):
+    fig = go.Figure()
+    if "WLSG" in df:
+        fig.add_trace(
+            go.Scatter(
+                x=df["Datetime"],
+                y=df["WLSG"],
+                name="Mực nước hạ du quan trắc",
+                line=dict(color="black", width=2, dash="dash"),
+            )
+        )
+    if "downstream_wl_optimized" in df:
+        fig.add_trace(
+            go.Scatter(
+                x=df["Datetime"],
+                y=df["downstream_wl_optimized"],
+                name="Mực nước hạ du tối ưu",
+                line=dict(color=OPTIMIZED_SERIES_COLOR, width=2.5, dash="dash"),
+            )
+        )
+    if threshold is not None:
+        fig.add_hline(
+            y=threshold,
+            line_color="#b42318",
+            line_dash="dot",
+            annotation_text="Ngưỡng cảnh báo hạ du",
+            annotation_position="top left",
+        )
+    fig.add_vline(x=current_time, line_color="#98a2b3", line_dash="dash")
+    fig.update_layout(
+        title="Quá trình mực nước tại điểm khống chế hạ du",
+        margin=dict(l=20, r=20, t=60, b=20),
+        legend=dict(orientation="h", y=1.08),
+        xaxis_title="Thời gian",
+        yaxis_title="Mực nước (m)",
         height=360,
     )
     return fig
@@ -254,8 +303,8 @@ def main():
     st.title("Mô phỏng vận hành lũ Dakdrinh")
     st.caption("Màn hình phát lại diễn biến lũ năm 2025 và gợi ý vận hành được tạo từ kết quả tối ưu hóa.")
 
-    horizons = [24, 48, 72]
-    selected_horizon = st.sidebar.radio("Tầm nhìn ra quyết định (giờ)", horizons, index=1)
+    selected_horizon_label = st.sidebar.radio("Decision Horizon", list(DECISION_HORIZONS.keys()), index=1)
+    selected_horizon = DECISION_HORIZONS[selected_horizon_label]
     playback_container = st.sidebar.container()
 
     summary_paths = list_run_summaries()
@@ -300,12 +349,11 @@ def main():
         unsafe_allow_html=True,
     )
 
-    top1, top2, top3, top4, top5 = st.columns(5)
+    top1, top2, top3, top4 = st.columns(4)
     top1.metric("Thời điểm", current_time.strftime("%Y-%m-%d %H:%M"))
-    top2.metric("Mực nước hồ", f"{current_row['WLDD']:.2f} m")
-    top3.metric("Lưu lượng xả tối ưu", f"{current_row['Qoutput_Reservoir1']:.2f} m3/s")
-    top4.metric("Lưu lượng hạ du tối ưu", f"{current_row['Q_controlpoint']:.2f} m3/s")
-    top5.metric("Mực nước cuối kỳ (tối ưu)", f"{window_summary['water_level_optimized_end_m']:.2f} m")
+    top2.metric("Lưu lượng xả tối ưu", f"{max(float(current_row['Qoutput_Reservoir1']), 0.0):.2f} m3/s")
+    top3.metric("Lưu lượng hạ du tối ưu", f"{max(float(current_row['Q_controlpoint']), 0.0):.2f} m3/s")
+    top4.metric("Mực nước cuối kỳ (tối ưu)", f"{window_summary['water_level_optimized_end_m']:.2f} m")
 
     left, right = st.columns([1.1, 0.9])
     with left:
@@ -325,12 +373,19 @@ def main():
     with chart2:
         st.plotly_chart(make_release_chart(window_df, current_time), use_container_width=True)
 
-    st.plotly_chart(
-        make_downstream_chart(window_df, params.get("downstream_flow_threshold"), current_time),
-        use_container_width=True,
-    )
+    downstream_left, downstream_right = st.columns(2)
+    with downstream_left:
+        st.plotly_chart(
+            make_downstream_flow_chart(window_df, params.get("downstream_flow_threshold"), current_time),
+            use_container_width=True,
+        )
+    with downstream_right:
+        st.plotly_chart(
+            make_downstream_wl_chart(window_df, params.get("downstream_water_level_threshold"), current_time),
+            use_container_width=True,
+        )
 
-    st.subheader("Tổng hợp kết quả")
+    st.subheader(f"Tổng hợp kết quả theo tầm nhìn {selected_horizon_label}")
     sum1, sum2, sum3, sum4 = st.columns(4)
     sum1.metric("Đỉnh xả quan trắc", f"{window_summary['release_peak_observed']:.1f} m3/s")
     sum2.metric("Đỉnh xả tối ưu", f"{window_summary['release_peak_optimized']:.1f} m3/s")
@@ -340,8 +395,8 @@ def main():
     st.dataframe(
         {
                 "Chỉ số": [
-                    "Bắt đầu cửa sổ",
-                    "Kết thúc cửa sổ",
+                    "Thời gian bắt đầu",
+                    "Thời gian kết thúc",
                     "Mực nước cuối kỳ quan trắc",
                     "Mực nước cuối kỳ tối ưu",
                     "Biến đổi đỉnh xả",

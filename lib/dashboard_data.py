@@ -18,6 +18,9 @@ TIMESERIES_EXPORT_PATH = DATA_DIR / "timeseries_export.csv"
 RESERVOIR_PARAMETER_PATH = DATA_DIR / "reservoir_parameters.csv"
 STORAGE_CURVE_PATH = DATA_DIR / "storage_V.csv"
 OBSERVED_EVENT_PATH = DATA_DIR / "DD_sub1234_2025_hourlyPS.xlsx"
+DOWNSTREAM_WL_K = 71.41922
+DOWNSTREAM_WL_P = 2.016432
+DOWNSTREAM_WL_WREF = 27.2
 
 
 @dataclass
@@ -74,12 +77,24 @@ def load_reservoir_parameters(path: Path = RESERVOIR_PARAMETER_PATH) -> dict[str
         values[key] = row["values"]
         units[key] = row.get("unit")
 
+    alias_map = {
+        "pre_flood_target_level": "pre_flood_maximum_level",
+        "pre_flood_maximum_level": "pre_flood_target_level",
+    }
+    for source_key, target_key in alias_map.items():
+        if source_key in values and target_key not in values:
+            values[target_key] = values[source_key]
+            units[target_key] = units.get(source_key)
+
     for key in (
         "normal_water_level",
         "pre_flood_target_level",
+        "pre_flood_maximum_level",
+        "pre_flood_minimum_level",
         "dead_water_level",
         "maximum_allowable_reservoir_level",
         "downstream_flow_threshold",
+        "downstream_water_level_threshold",
     ):
         if key in values:
             values[key] = float(pd.to_numeric(values[key], errors="coerce"))
@@ -95,6 +110,9 @@ def load_storage_curve(path: Path = STORAGE_CURVE_PATH) -> pd.DataFrame:
 def load_optimized_timeseries(path: Path = TIMESERIES_EXPORT_PATH) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["time"] = pd.to_datetime(df["time"])
+    for column in ("Qoutput_Reservoir1", "Q_controlpoint"):
+        if column in df:
+            df[column] = pd.to_numeric(df[column], errors="coerce").clip(lower=0.0)
     curve = load_storage_curve()
     df["reservoir_level_optimized"] = np.interp(df["V_Reservoir1"], curve["storage_V"], curve["storage_H"])
     return df
@@ -118,8 +136,12 @@ def build_merged_timeseries(summary: dict[str, Any], observed: pd.DataFrame, opt
     merged["downstream_threshold"] = summary.get("reservoir_parameters", {}).get("values", {}).get("downstream_flow_threshold")
     merged["normal_water_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("normal_water_level")
     merged["pre_flood_target_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_target_level")
+    merged["pre_flood_maximum_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_maximum_level")
+    merged["pre_flood_minimum_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("pre_flood_minimum_level")
     merged["dead_water_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("dead_water_level")
     merged["maximum_allowable_reservoir_level"] = summary.get("reservoir_parameters", {}).get("values", {}).get("maximum_allowable_reservoir_level")
+    merged["downstream_water_level_threshold"] = summary.get("reservoir_parameters", {}).get("values", {}).get("downstream_water_level_threshold")
+    merged["downstream_wl_optimized"] = np.power(merged["Q_controlpoint"] / DOWNSTREAM_WL_K, 1.0 / DOWNSTREAM_WL_P) + DOWNSTREAM_WL_WREF
     return merged
 
 
@@ -139,8 +161,7 @@ def build_readiness(summary_path: Path, summary: dict[str, Any]) -> dict[str, tu
 
 def load_dashboard_bundle(summary_path: Path) -> DashboardBundle:
     summary = load_json(summary_path)
-    if "reservoir_parameters" not in summary:
-        summary["reservoir_parameters"] = load_reservoir_parameters()
+    summary["reservoir_parameters"] = load_reservoir_parameters()
 
     raw_event_path = resolve_local_artifact(summary.get("raw_event_source"), summary_path, "raw_event_source")
     observed = load_observed_event(raw_event_path)

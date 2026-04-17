@@ -1,7 +1,9 @@
 ﻿parameter,values,unit
 normal water level,410,m
-pre-flood target level,405,m
+pre-flood maximum level,405,m
+pre-flood minimum level,400,m
 dead water level,375,m
 maximum allowable reservoir level,414.88,m
 downstream flow threshold,4028,m3/s
+downstream water level threshold,34.5,m
 priority order of objectives,bring reservoir water level back to normal level for energy generation and reduce flood downstream,na
